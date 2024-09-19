@@ -1,0 +1,312 @@
+---
+title: "Actividad Final"
+subtitle: "Ejercicio de analisis de amenidades del Carchi"
+author: "Adrián Enríquez"
+date: "Septiembre 2024"
+format: docx
+editor: visual
+---
+
+# Parte 1: Indentificación y reflexión sobre las Amenidades de Salud
+
+Se procede a realizar la busquedad de hospitales y clinicas en los cantones Espejo y Mira pertenecientes a la provincia del Carchi usando OpenStreetMap.
+
+```{r}
+#Librerías
+library(osmdata)
+library(sf)
+library(tidyverse)
+library(readxl)
+library(spdep)
+library(lattice)
+
+```
+
+```{r}
+
+#Vector de parroquias urbanas y rurales del cantón Espejo y Mira
+
+
+parroquias_espejo <- c( #Espejo
+                "El Ángel","27 De Septiembre", "El Goaltal",
+                     "La Libertad", "San Isidro")
+                #Mira
+parroquias_mira <- c("Mira","Concepción", "Jijón y Caamaño", "Juan Montalvo")
+
+parroquias_total <- c(
+                "El Ángel","27 De Septiembre", "El Goaltal",
+                     "La Libertad", "San Isidro",
+                "Mira","Concepción", "Jijón y Caamaño", "Juan Montalvo")
+#amenidades
+localizaciones <- c("hospital", "clinic")
+
+#Función para obtener los puntos usando una lista de parroquias del cantón Espejo y Mira
+get_puntos <- function(zonas, provincia, pais, localizaciones) {
+  
+  # lista para almacenar los resultados
+  puntos_lista <- vector("list", length(zonas))
+  
+  # Bucle por cada zona (parroquia)
+  for (i in seq_along(zonas)) {
+    zona <- zonas[i]
+    
+    # Obtener el bounding box para cada zona
+    bbox <- getbb(paste(zona, provincia, pais, sep = ", "))
+    
+    # Verificar si el bbox es válido
+    if (is.null(bbox)) next
+    
+    # Construir la consulta OSM y obtener los puntos
+    query <- opq(bbox) %>% 
+      add_osm_feature(key = "amenity", value = localizaciones) %>% 
+      osmdata_sf()
+    
+    # Si hay puntos disponibles, almacenarlos en la lista
+    if (!is.null(query$osm_points) && nrow(query$osm_points) > 0) {
+      puntos_lista[[i]] <- query$osm_points[, c("osm_id", "geometry")]
+    }
+  }
+  
+  # Combinar los resultados no nulos en un solo objeto sf
+  puntos_sf <- do.call(rbind, puntos_lista)
+  
+  # Retornar el objeto sf con geometría
+  return(st_as_sf(puntos_sf, crs = 4326))
+}
+#Guardo puntos
+puntos_espejo <- get_puntos(parroquias_espejo,"Carchi", "Ecuador", localizaciones)
+puntos_mira <- get_puntos(parroquias_mira,"Carchi", "Ecuador", localizaciones)
+puntos_global <- get_puntos(parroquias_total,"Carchi", "Ecuador", localizaciones)
+
+#Numero de amenidades de hospitales de los cantones espejo y Mira
+nrow(puntos_espejo)
+nrow(puntos_mira)
+nrow(puntos_espejo) + nrow(puntos_mira)
+
+```
+
+En un inicio se iba a tomar como area de estudio a la parroquia de El Ángel perteneciente al cantón Espejo para analizar la cantidad de amenidades, pero al ser una parroquia pequeña no obtenía una cantidad de datos suficiente. Por lo tando, se tomó los puntos de cada parroquia de los cantones Espejo con 19 amenidades y Mira con 41 amenidades pertenecientes a la provincia de Carchi teniendo un total de 60 amenidades. Para ello, se usó OpenStreetMap para determinar las amenidades de la parroquias mencionadas en la variable parroquias agregando condiciones en el bbox para que se encuentre limitado de forma correcta (tome las parroquias dentro de los cantones en los que se basa el estudio).
+
+# Parte 2: Unión de los polígonos de Zonas Censales a Nivel de Parroquias
+
+Obtenemos la zona geometria de la provincia del carchi
+
+```{r}
+# Lista las capas disponibles dentro del archivo GeoDatabase para identificar la que necesitamos.
+st_layers("data/GEODATABASE_NACIONAL_2021/GEODATABASE_NACIONAL_2021.gdb")
+
+# Lee la capa "zon_a" desde el archivo GeoDatabase y la guarda en el objeto 'zonas'.
+zonas <- st_read("data/GEODATABASE_NACIONAL_2021/GEODATABASE_NACIONAL_2021.gdb",
+                 layer = "zon_a")
+
+# Filtra las zonas para mantener solo aquellas cuyo código comienza con "0403" (Carchi, Espejo).
+zonas <- zonas %>% 
+  filter(str_detect(zon, "^0403|^0404"))
+```
+
+Para graficar empleamos el código del gráfico **ggplot2** y jugamos con las opciones de Quarto chunks
+
+```{r, echo = FALSE, fig.height= 6, fgi.dpi = 300}
+ggplot() +
+  geom_sf(data = zonas) +
+  geom_sf(data = puntos_espejo, aes(color = "Espejo")) +  # Color para puntos_espejo
+  geom_sf(data = puntos_mira, aes(color = "Mira")) +      # Color para puntos_mira
+  labs(
+    title = "Figura 1. Distribución de hospitales en el cantón Espejo y Mira",
+    subtitle = "Fuente: OpenStreetMaps",
+    color = "Zona"  # Título de la leyenda para los colores
+  ) + 
+  scale_color_manual(values = c("Espejo" = "blue", "Mira" = "red")) +  # Asignación de colores
+  theme_minimal()
+
+```
+
+Lectura del archivo con la población del Ecuador por parroquias
+
+```{r}
+# Lista las hojas disponibles en el archivo Excel para identificar la que necesitamos.
+excel_sheets("data/01_2022_CPV_Estructura_poblacional.xlsx")
+
+# Lectura de la hoja "1.2" del archivo Excel, en el rango específico de celdas B10:G1299, 
+poblacion <- read_excel("data/01_2022_CPV_Estructura_poblacional.xlsx", 
+                        sheet = "1.2",
+                        range = "B10:G1299"
+                        )
+
+# Renombra las columnas del dataframe para hacerlas más descriptivas.
+names(poblacion) <- c("provincia", "canton", "parroquia", "total_nacional", "hombres", "mujeres")
+
+```
+
+Limpiamos los resultados del censo:
+
+```{r}
+# Filtra el dataframe para eliminar filas con valores NA en la columna 'provincia'
+# y excluye filas donde la columna 'parroquia' contiene las palabras "Total" o "Nacional".
+poblacion <- poblacion %>% 
+  filter(!is.na(provincia), 
+         str_detect(parroquia, "^Total|Nacional", negate = TRUE)) 
+
+# Convierte los valores de las columnas 'provincia', 'canton', y 'parroquia' a mayúsculas para mantener uniformidad.
+poblacion <- poblacion %>% 
+  mutate(across(c(provincia, canton, parroquia), str_to_upper))
+
+```
+
+Ahora leemos la codificación DPA del INEC
+
+```{r}
+# Lee la hoja "CODIGOS" del archivo Excel que contiene la codificación DPA.
+dpa <- read_excel("data/CODIFICACIÓN_2022.xlsx", sheet = "CODIGOS")
+```
+
+Vamos a acordamos de las funciones join:
+
+```{r}
+# Left Join entre la tabla de población y la tabla de codificación DPA.
+poblacion <- poblacion %>% 
+  left_join(dpa, by = c("provincia" = "DPA_DESPRO",   
+                        "canton" = "DPA_DESCAN",     
+                        "parroquia" = "DPA_DESPAR"   
+                        ))
+```
+
+# Parte 3: Cálculo del Número de Amenidades
+
+Nos queda unir los poligonos a nivel de parroquia por que estan a nivel de zona censal
+
+```{r}
+# Crea una nueva columna 'DPA_PARROQ' con los 6 primeros caracteres de la columna zon
+zonas <- zonas %>% 
+  mutate(DPA_PARROQ = str_sub(zon, 1, 6)) 
+
+# Se agrupa las geometrías por 'DPA_PARROQ' y realiza una unión espacial de las formas para consolidar los polígonos.
+parroquias <- zonas %>% 
+  group_by(DPA_PARROQ) %>%
+  summarise(Shape = st_union(Shape)) 
+
+```
+
+Unimos los datos de poblacion:
+
+```{r}
+parroquias <- parroquias %>% 
+  left_join(poblacion)
+```
+
+Mapas de calor
+
+```{r, echo = FALSE, fig.height= 6, fgi.dpi = 300}
+parroquias %>% 
+  ggplot() +
+  geom_sf(aes(fill = log(total_nacional))) +
+  geom_sf(data = puntos_espejo, aes(color = "Espejo")) +  # Color para puntos_espejo
+  geom_sf(data = puntos_mira, aes(color = "Mira")) + 
+  scale_color_manual(values = c("Espejo" = "blue", "Mira" = "black"))+# Color para puntos_mira 
+  scale_fill_gradient(low = "#FFC30D", high = "#900C3F") +
+  labs("Figura 2. Densidad Poblacional de la provincia del Carchi",
+       caption = "Fuente: INEC")
+```
+
+En el mapa de calor, se observa que la mayor concentración de hospitales se encuentra en la ciudad de Tulcán, que es la capital de la provincia de Carchi. Esto es esperado, ya que las capitales provinciales suelen contar con una mayor infraestructura de salud. Además, se destaca la presencia significativa de hospitales en el cantón de Montúfar, que es la segunda parroquia más grande en términos de población del cantón. Esto puede indicar una distribución de servicios de salud que responde a la densidad poblacional y a la importancia relativa de estas localidades dentro de la provincia.
+
+# Parte 4: Cálculo del Ratio de Amenidades por habitante
+
+Vamos al indicador de amenidades por cada 100 habitantes:
+
+```{r}
+
+puntos_global <- st_transform(x = puntos_global, crs = st_crs(parroquias))
+
+parroquias_puntos <- st_join(x = puntos_global, y = parroquias, join = st_within)
+
+parroquias_puntos <-  parroquias_puntos %>% 
+  count(DPA_PARROQ, name = "hospitales") %>% 
+  as_tibble()
+
+parroquias <- parroquias %>% 
+  left_join(parroquias_puntos)
+
+parroquias <- parroquias %>% 
+  mutate(hospitales = replace_na(hospitales, 0))
+```
+
+Se calcula el indicador
+
+```{r, echo = FALSE, fig.height= 6, fgi.dpi = 300}
+parroquias <- parroquias %>% 
+  mutate(indicador = (hospitales/total_nacional) * 100)
+
+parroquias %>% 
+  ggplot() +
+  geom_sf(aes(fill = indicador)) +
+  geom_sf(data = puntos_global) +
+  scale_fill_gradient(low = "#FFC30D", high = "#900C3F") +
+  labs(title = "Figura 3. indicador de amenidades de salud por cada 100 habitantes",
+       caption = "Fuente: INEC")
+```
+
+En los cantones Espejo y Mira se puede observar que el cantón de Mira concentra la mayor cantidad de amenidades de salud. Esto refleja una tendencia común en la cual los centros de salud se localizan en donde existe mayor densidad poblacional.
+
+# Parte 5: Cálculo del indice de Moran para el indicador de Amenidades de salud
+
+```{r}
+vecinos <- poly2nb(parroquias, queen = TRUE)
+
+vecinos_pesos <- nb2listw(vecinos, style = "W")
+
+matriz <- listw2mat(vecinos_pesos)
+ncol(matriz)
+nrow(matriz)
+```
+
+Se visualiza la matriz de vecindad
+
+```{r}
+levelplot(t(matriz[1:8, 1:8]), 
+          scales = list(y = list(at = seq(10, 50, by = 10), 
+                                 labels = seq(10, 50, by = 10))), 
+          main = "Matriz de Pesos Espaciales Basada en Contigüidad")
+
+```
+
+Y por último, se calcula el indice de moran
+
+```{r}
+moran <- moran.test(parroquias$hospitales, listw = vecinos_pesos) 
+moran
+
+
+```
+
+Calculo de indice local de moran
+
+```{r}
+local_moran <- localmoran(parroquias$hospitales, listw = vecinos_pesos)
+```
+
+```{r}
+head(local_moran)
+```
+
+Integramos los resultados del indice de Moran Local y los atributos de objetos resultantes
+
+```{r}
+clusters <- attributes(local_moran)$quadr
+
+parroquias_zonas <- bind_cols(parroquias, clusters)
+
+local_moran <- local_moran %>% 
+  as_tibble() 
+
+parroquias_zonas <- parroquias_zonas %>% 
+  bind_cols(local_moran)
+
+plot_1 <- parroquias %>% 
+  ggplot() + 
+  geom_sf(aes(fill = hospitales)) + 
+  scale_fill_viridis_c(option = "A") 
+plot_1
+```
+
+Se tiene un p-valor mayor que 0.05 por lo que no rechazamos la hipótesis nula de ausencia de autocorrelación espacial. Es decir, existe evidencia estadística de que no existe una autocorrelación espacial significativa en el promedio del número de hospitales por cada 100 habitantes.
